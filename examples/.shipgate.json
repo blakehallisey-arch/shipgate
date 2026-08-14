@@ -1,0 +1,56 @@
+{
+  "checks": [
+    {
+      "name": "design",
+      "when": {
+        "paths": [
+          "**/*.html",
+          "**/*.css",
+          "**/*.svg",
+          "public/**",
+          "**/*.png",
+          "**/*.jpg",
+          "**/*.jpeg",
+          "**/*.webp"
+        ]
+      },
+      "how": null,
+      "why": "this ships something a human looks at",
+      "satisfied_by": "manual"
+    },
+    {
+      "name": "tests",
+      "when": {
+        "paths": [
+          "src/**",
+          "lib/**",
+          "**/*.js",
+          "**/*.ts",
+          "**/*.jsx",
+          "**/*.tsx"
+        ]
+      },
+      "how": "npm test",
+      "why": "code changed and the suite is cheap"
+    },
+    {
+      "name": "review",
+      "when": {
+        "lines_changed": 200
+      },
+      "how": null,
+      "why": "over 200 lines is not a tweak",
+      "satisfied_by": "manual"
+    }
+  ],
+  "ship_commands": [
+    "git push",
+    "gh pr merge",
+    "git merge",
+    "npm publish",
+    "vercel deploy",
+    "vercel --prod"
+  ],
+  "default_branch": "main",
+  "ttl_minutes": 90
+}

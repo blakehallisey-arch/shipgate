@@ -1,0 +1,39 @@
+Real output, captured from a scratch repo.
+
+The change: public/index.html, public/site.css and src/app.py,
+committed on the default branch. The command was a push to that
+branch. The config is examples/.shipgate.json.
+
+What the hook writes on stdout
+------------------------------
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "<the text below>"
+  }
+}
+
+permissionDecisionReason -- this is the part the agent reads
+-----------------------------------------------------------
+
+shipgate: not yet. 2 checks this change needs have not passed.
+
+  Ship command: git push
+  What it carries: 5 files, 63 lines changed
+    .gitignore, .shipgate.json, public/index.html, public/site.css, src/app.py
+
+  [ ] design — has not run for this change
+      required because: public/index.html matches "**/*.html"
+      why it exists: this ships something a human looks at
+      no script can judge this one. Do it, then record it:
+      run: python3 -m shipgate pass design --note "what you checked"
+
+  [ ] tests — has not run for this change
+      required because: src/app.py matches "src/**"
+      why it exists: code changed and the suite is cheap
+      run: python3 -m shipgate run tests
+
+Run those, then run the ship command again.
+Passes are stamped with the current tree. Edit a file afterwards and the check comes back — that is deliberate, a pass on an older tree is not a pass on what you are about to ship.
+If a check genuinely does not apply here, say which one and why before you go around this.

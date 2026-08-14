@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# shipgate records which checks passed, per machine, not per branch
+.shipgate/
