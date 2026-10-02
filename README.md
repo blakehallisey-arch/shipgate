@@ -205,13 +205,18 @@ When the outcome is ambiguous it finalizes, which leaves the gate stricter than
 it needs to be. Between an annoying gate and a blind one, take the annoying one.
 
 **What it cannot see, and which way it fails.** Claude Code reads empty stdout as
-"allow", so a crash inside a deny-hook silently allows. That direction is chosen
-deliberately here rather than fallen into — a gate that blocks every push in the
-repo because of its own bug gets ripped out within the hour — and every
-fall-through writes a line to `.shipgate/hook.log` saying it allowed blind and
-why. The same goes for a config it cannot parse: allowed, and logged as blind.
-If the diff comes back empty (re-pushing an already-pushed branch, a deploy run
-after the merge landed) it allows and logs that too.
+"allow". The quiet fall-throughs allow and say so in `.shipgate/hook.log`: not a
+git repo, no config, a config it cannot parse, a payload that is not JSON, or a
+diff that comes back empty (re-pushing an already-pushed branch, a deploy run
+after the merge landed).
+
+A crash inside the hook is the one case that does not allow. If the hook raises
+while checking a ship command, the ship is denied, the error is in the
+transcript, and the full traceback is in the log. It used to allow blind here on
+the theory that a hook blocking every push gets uninstalled within the hour. The
+trade was wrong: a hook that crashes on exactly the command it exists to check,
+and then waves it through, is a gate that only works on good days. A crash on a
+non-ship command still allows, so a dead hook can never block `ls`.
 
 **Where state lives.** `<repo root>/.shipgate/state.json` and
 `<repo root>/.shipgate/hook.log`, in the repo being gated, and nowhere else. Both

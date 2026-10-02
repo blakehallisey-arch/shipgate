@@ -18,12 +18,19 @@ the DIFF, not from the topic and not from a fixed list. A docs-only merge sails
 through in silence. A merge that carries a page a human looks at asks for the
 design review, by name, with the command.
 
-WHICH WAY IT FAILS. Claude Code reads an empty stdout as "allow". So the failure
-direction here is allow, and it is chosen on purpose rather than fallen into: a
-crash inside this hook would otherwise block every push in the repo, which is how
-a gate gets ripped out within the hour. Every fall-through writes a line to
-`.shipgate/hook.log` saying it allowed blind and why, so a gate that stopped
-working cannot look like a gate with nothing to say.
+WHICH WAY IT FAILS. Claude Code reads an empty stdout as "allow". The quiet
+fall-throughs (not a repo, no config, no diff to read, a payload that is not
+JSON) still allow, and each one writes a line to `.shipgate/hook.log` saying so.
+
+A crash INSIDE the hook is different, and it used to allow too. The theory was
+that a broken hook blocking every push gets ripped out within the hour. The
+trade was wrong: an exception on the one command the gate exists for meant the
+ship went through unchecked, and the only trace was a line in a log nobody
+opens. So a crash on a SHIP command now denies, puts the error in the
+transcript, and points at the log. A crash on anything else still allows, so a
+dead hook cannot block `ls`. A merge that waits a minute while someone reads a
+traceback is the cheap outcome. A page shipping past a dead gate is the
+expensive one.
 
 Reads the tool call on stdin as JSON, writes a decision on stdout.
 """
@@ -47,6 +54,15 @@ from . import gitinfo, rules
 from . import state as state_mod
 
 SHIP_TOOLS = ("Bash",)
+
+# Set the moment run() learns the command is a ship. If the hook crashes after
+# that point there is no question left about which way to fail. POST_EVENT marks
+# a PostToolUse call, where the command has already run and a deny would be a
+# PreToolUse-shaped answer to a question nobody asked. SHIP_PHRASES is the
+# repo's own configured list, kept for the crudest fallback.
+SHIPPING = None
+POST_EVENT = False
+SHIP_PHRASES = None
 
 
 def emit(obj):
@@ -95,6 +111,8 @@ def landed(payload):
 
 
 def run(payload):
+    global SHIPPING, POST_EVENT, SHIP_PHRASES
+    SHIPPING, POST_EVENT, SHIP_PHRASES = None, False, None
     if payload.get("tool_name") not in SHIP_TOOLS:
         allow()
 
@@ -109,8 +127,10 @@ def run(payload):
         allow()                       # not a git repo; nothing to read a diff from
 
     cfg = config_mod.load(root)
+    SHIP_PHRASES = list(cfg.ship_commands or [])
 
     if payload.get("hook_event_name") == "PostToolUse":
+        POST_EVENT = True
         if rules.is_ship(command, cfg, root)[0]:
             state_mod.settle_ship(root, landed=landed(payload))
         allow()
@@ -118,6 +138,7 @@ def run(payload):
     shipping, phrase = rules.is_ship(command, cfg, root)
     if not shipping:
         allow()                       # the silent 99%: branch pushes, reads, builds
+    SHIPPING = phrase
 
     if cfg.error:
         log(root, "ALLOWED BLIND: %s" % cfg.error)
@@ -148,8 +169,31 @@ def run(payload):
     allow()
 
 
+def looks_like_ship(command, root):
+    """Was the command that crashed the hook a ship?
+
+    Known for certain once run() got past its is_ship call. Before that point
+    it is re-derived, and if even that raises, the raw text is read against the
+    built-in ship phrases. Three tries, each cruder than the last, because the
+    answer decides whether a crash blocks the command or lets it through."""
+    if SHIPPING:
+        return True
+    try:
+        return rules.is_ship(command, config_mod.load(root), root)[0]
+    except Exception:
+        low = command.lower()
+        phrases = SHIP_PHRASES or config_mod.DEFAULT_SHIP_COMMANDS
+        return any(p.lower() in low for p in phrases)
+
+
+def crash_text(tb):
+    last = tb.strip().splitlines()[-1] if tb.strip() else "unknown error"
+    return ("shipgate crashed while checking this ship and will not let it "
+            "through blind: %s. The full traceback is in .shipgate/hook.log. "
+            "Fix the hook, or uninstall it on purpose and ship without it." % last)
+
+
 def main():
-    root = None
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
@@ -163,11 +207,21 @@ def main():
     except SystemExit:
         raise
     except Exception:
+        tb = traceback.format_exc()
+        command = str((payload.get("tool_input") or {}).get("command") or "")
         try:
-            root = gitinfo.repo_root(payload.get("cwd") or os.getcwd())
+            root = gitinfo.repo_root(rules.leading_cd(command, payload.get("cwd") or os.getcwd()))
         except Exception:
             root = None
-        log(root, "ALLOWED BLIND after an exception:\n%s" % traceback.format_exc())
+        if POST_EVENT:
+            # The command already ran. There is nothing left to deny, and a
+            # PreToolUse-shaped deny here would be noise after the fact.
+            log(root, "allowed: PostToolUse, the command already ran; the hook crashed settling it:\n%s" % tb)
+            allow()
+        if looks_like_ship(command, root):
+            log(root, "DENIED after an exception inside the hook:\n%s" % tb)
+            deny(crash_text(tb))
+        log(root, "allowed: not a ship command, and the hook crashed on it anyway:\n%s" % tb)
         allow()
 
 

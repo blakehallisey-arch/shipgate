@@ -2,9 +2,11 @@
 
 The deny paths are the point. A guard with no test on its denies is decoration.
 """
+import io
 import json
 import os
 import unittest
+from unittest.mock import patch
 
 import util
 from util import Repo, cli, decision_of, payload, reason_of, run_hook
@@ -227,3 +229,72 @@ class TestCli(HookCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestCrashInsideTheHook(HookCase):
+    """The failure direction on the hook's own bug. A crash on a ship denies and
+    says why; a crash on anything else still allows, so a dead hook cannot block
+    `ls`. These run in-process: the crash is injected with a patch, and a
+    subprocess cannot see one."""
+
+    def run_main(self, command):
+        from shipgate import hook
+        hook.SHIPPING = None
+        out = io.StringIO()
+        with patch("sys.stdin", io.StringIO(payload(command, self.repo.path))), \
+             patch("sys.stdout", out):
+            with self.assertRaises(SystemExit) as cm:
+                hook.main()
+        self.assertEqual(cm.exception.code, 0)
+        return json.loads(out.getvalue() or "{}")
+
+    def log_text(self):
+        path = os.path.join(self.repo.path, ".shipgate", "hook.log")
+        if not os.path.exists(path):
+            return ""
+        with open(path) as fh:
+            return fh.read()
+
+    def test_a_crash_while_checking_a_ship_denies_it_and_names_the_log(self):
+        from shipgate import hook
+        self.repo.write("public/index.html", "<p>new</p>\n")
+        with patch.object(hook.gitinfo, "changed", side_effect=RuntimeError("boom")):
+            out = self.run_main("git push origin main")
+        self.assertEqual(decision_of(out), "deny")
+        self.assertIn("boom", reason_of(out))
+        self.assertIn(".shipgate/hook.log", reason_of(out))
+        self.assertIn("DENIED after an exception", self.log_text())
+        self.assertIn("RuntimeError: boom", self.log_text())
+
+    def test_a_crash_before_the_ship_check_still_denies_a_ship(self):
+        from shipgate import hook
+        self.repo.write("public/index.html", "<p>new</p>\n")
+        # config.load raises before run() ever learns the command is a ship
+        with patch.object(hook.config_mod, "load", side_effect=RuntimeError("config exploded")):
+            out = self.run_main("git push origin main")
+        self.assertEqual(decision_of(out), "deny")
+        self.assertIn("config exploded", reason_of(out))
+
+    def test_a_crash_settling_a_post_tool_use_allows_the_command_already_ran(self):
+        from shipgate import hook
+        self.repo.write("public/index.html", "<p>new</p>\n")
+        out = io.StringIO()
+        with patch.object(hook.state_mod, "settle_ship", side_effect=RuntimeError("disk full")), \
+             patch("sys.stdin", io.StringIO(payload("git push origin main", self.repo.path, event="PostToolUse"))), \
+             patch("sys.stdout", out):
+            with self.assertRaises(SystemExit):
+                hook.main()
+        self.assertEqual(json.loads(out.getvalue() or "{}"), {})
+        self.assertIn("PostToolUse", self.log_text())
+
+    def test_the_crudest_fallback_knows_the_repo_s_own_ship_phrases(self):
+        from shipgate import hook
+        hook.SHIPPING, hook.POST_EVENT, hook.SHIP_PHRASES = None, False, ["make deploy"]
+        with patch.object(hook.rules, "is_ship", side_effect=RuntimeError("no")):
+            self.assertTrue(hook.looks_like_ship("make deploy", self.repo.path))
+            self.assertFalse(hook.looks_like_ship("make test", self.repo.path))
+
+    def test_a_crash_on_a_non_ship_command_still_allows(self):
+        from shipgate import hook
+        with patch.object(hook.gitinfo, "repo_root", side_effect=RuntimeError("boom")):
+            out = self.run_main("ls -la")
+        self.assertEqual(out, {})
