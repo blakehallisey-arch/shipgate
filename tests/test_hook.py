@@ -274,6 +274,25 @@ class TestCrashInsideTheHook(HookCase):
         self.assertEqual(decision_of(out), "deny")
         self.assertIn("config exploded", reason_of(out))
 
+    def test_a_crash_settling_a_post_tool_use_allows_the_command_already_ran(self):
+        from shipgate import hook
+        self.repo.write("public/index.html", "<p>new</p>\n")
+        out = io.StringIO()
+        with patch.object(hook.state_mod, "settle_ship", side_effect=RuntimeError("disk full")), \
+             patch("sys.stdin", io.StringIO(payload("git push origin main", self.repo.path, event="PostToolUse"))), \
+             patch("sys.stdout", out):
+            with self.assertRaises(SystemExit):
+                hook.main()
+        self.assertEqual(json.loads(out.getvalue() or "{}"), {})
+        self.assertIn("PostToolUse", self.log_text())
+
+    def test_the_crudest_fallback_knows_the_repo_s_own_ship_phrases(self):
+        from shipgate import hook
+        hook.SHIPPING, hook.POST_EVENT, hook.SHIP_PHRASES = None, False, ["make deploy"]
+        with patch.object(hook.rules, "is_ship", side_effect=RuntimeError("no")):
+            self.assertTrue(hook.looks_like_ship("make deploy", self.repo.path))
+            self.assertFalse(hook.looks_like_ship("make test", self.repo.path))
+
     def test_a_crash_on_a_non_ship_command_still_allows(self):
         from shipgate import hook
         with patch.object(hook.gitinfo, "repo_root", side_effect=RuntimeError("boom")):

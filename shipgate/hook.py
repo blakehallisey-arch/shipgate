@@ -56,8 +56,13 @@ from . import state as state_mod
 SHIP_TOOLS = ("Bash",)
 
 # Set the moment run() learns the command is a ship. If the hook crashes after
-# that point there is no question left about which way to fail.
+# that point there is no question left about which way to fail. POST_EVENT marks
+# a PostToolUse call, where the command has already run and a deny would be a
+# PreToolUse-shaped answer to a question nobody asked. SHIP_PHRASES is the
+# repo's own configured list, kept for the crudest fallback.
 SHIPPING = None
+POST_EVENT = False
+SHIP_PHRASES = None
 
 
 def emit(obj):
@@ -106,7 +111,8 @@ def landed(payload):
 
 
 def run(payload):
-    global SHIPPING
+    global SHIPPING, POST_EVENT, SHIP_PHRASES
+    SHIPPING, POST_EVENT, SHIP_PHRASES = None, False, None
     if payload.get("tool_name") not in SHIP_TOOLS:
         allow()
 
@@ -121,8 +127,10 @@ def run(payload):
         allow()                       # not a git repo; nothing to read a diff from
 
     cfg = config_mod.load(root)
+    SHIP_PHRASES = list(cfg.ship_commands or [])
 
     if payload.get("hook_event_name") == "PostToolUse":
+        POST_EVENT = True
         if rules.is_ship(command, cfg, root)[0]:
             state_mod.settle_ship(root, landed=landed(payload))
         allow()
@@ -174,7 +182,8 @@ def looks_like_ship(command, root):
         return rules.is_ship(command, config_mod.load(root), root)[0]
     except Exception:
         low = command.lower()
-        return any(p.lower() in low for p in config_mod.DEFAULT_SHIP_COMMANDS)
+        phrases = SHIP_PHRASES or config_mod.DEFAULT_SHIP_COMMANDS
+        return any(p.lower() in low for p in phrases)
 
 
 def crash_text(tb):
@@ -204,6 +213,11 @@ def main():
             root = gitinfo.repo_root(rules.leading_cd(command, payload.get("cwd") or os.getcwd()))
         except Exception:
             root = None
+        if POST_EVENT:
+            # The command already ran. There is nothing left to deny, and a
+            # PreToolUse-shaped deny here would be noise after the fact.
+            log(root, "allowed: PostToolUse, the command already ran; the hook crashed settling it:\n%s" % tb)
+            allow()
         if looks_like_ship(command, root):
             log(root, "DENIED after an exception inside the hook:\n%s" % tb)
             deny(crash_text(tb))
