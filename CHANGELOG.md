@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 — a crash on a ship denies
+
+- An exception inside the hook while checking a ship command now DENIES the
+  ship, names the error in the transcript and writes the traceback to
+  `.shipgate/hook.log`. It used to allow blind. A crash on a non-ship command
+  still allows, so a broken hook cannot block ordinary commands.
+
 ## 0.1.0 — first cut
 
 - PreToolUse hook over ship commands, with the required checks derived from the
